@@ -1,0 +1,15 @@
+name: ai_learning
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - numpy
+  - pandas
+  - matplotlib
+  - jupyter
+  - scikit-learn
