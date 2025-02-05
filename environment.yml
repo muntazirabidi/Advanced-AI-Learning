@@ -1,15 +1,18 @@
 name: ai_learning
 channels:
-  - pytorch
   - conda-forge
   - defaults
 dependencies:
   - python=3.10
-  - pytorch
-  - torchvision
-  - torchaudio
   - numpy
   - pandas
   - matplotlib
   - jupyter
   - scikit-learn
+  - ipykernel
+  # We'll install PyTorch and TensorFlow separately via pip
+  - pip
+  - pip:
+      - tensorflow-macos
+      - tensorflow-metal
+      - --pre torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/nightly/cpu
