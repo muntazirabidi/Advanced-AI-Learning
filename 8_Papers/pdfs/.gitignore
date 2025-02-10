@@ -1,0 +1,4 @@
+# Ignore all PDFs
+*.pdf
+# But keep the directory structure
+!.gitignore
