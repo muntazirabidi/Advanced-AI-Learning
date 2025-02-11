@@ -8,14 +8,15 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Optional, List, Dict
 from dataclasses import dataclass
 
+# Configuration Classes
 @dataclass
 class BNNConfig:
     """Configuration for Bayesian Neural Network"""
     hidden_sizes: List[int] = None
-    prior_std: float = 1.0        # Standard deviation for weight priors
-    learning_rate: float = 0.01
+    prior_std: float = 0.1        # Standard deviation for weight priors
+    learning_rate: float = 0.05
     num_samples: int = 100        # Number of samples for prediction
-    epochs: int = 2000
+    epochs: int = 5000
     
     def __post_init__(self):
         if self.hidden_sizes is None:
@@ -29,6 +30,7 @@ class GPConfig:
     n_iterations: int = 100
     noise_prior: float = 0.1      # Prior for observation noise
 
+# Bayesian Neural Network Implementation
 class BayesianLinear(nn.Module):
     """Bayesian linear layer with Gaussian prior and posterior"""
     def __init__(self, in_features: int, out_features: int, prior_std: float):
@@ -48,17 +50,16 @@ class BayesianLinear(nn.Module):
         self.weight_prior = dist.Normal(0, prior_std)
         self.bias_prior = dist.Normal(0, prior_std)
         
+        # Initialize parameters
         self.reset_parameters()
         
     def reset_parameters(self):
-        """Initialize the posterior parameters"""
         nn.init.xavier_normal_(self.weight_mu)
         nn.init.constant_(self.weight_rho, -3)
         nn.init.zeros_(self.bias_mu)
         nn.init.constant_(self.bias_rho, -3)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass with reparameterization trick"""
         weight_std = torch.log1p(torch.exp(self.weight_rho))
         bias_std = torch.log1p(torch.exp(self.bias_rho))
         
@@ -68,7 +69,6 @@ class BayesianLinear(nn.Module):
         return F.linear(x, weight, bias)
     
     def kl_loss(self) -> torch.Tensor:
-        """Compute KL divergence between posterior and prior"""
         weight_std = torch.log1p(torch.exp(self.weight_rho))
         bias_std = torch.log1p(torch.exp(self.bias_rho))
         
@@ -105,6 +105,7 @@ class BayesianNeuralNetwork(nn.Module):
     def kl_loss(self) -> torch.Tensor:
         return sum(layer.kl_loss() for layer in self.layers)
 
+# Gaussian Process Implementation
 class GPModel(gpytorch.models.ExactGP):
     """Gaussian Process model with configurable kernel"""
     def __init__(self, train_x: torch.Tensor, train_y: torch.Tensor, 
@@ -130,6 +131,7 @@ class GPModel(gpytorch.models.ExactGP):
         covar_x = self.covar_module(x)
         return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
 
+# Training Functions
 def train_bnn(model: BayesianNeuralNetwork,
               X: np.ndarray,
               y: np.ndarray,
@@ -189,11 +191,12 @@ def train_gp(model: GPModel,
     
     return model, losses
 
+# Prediction Functions
 def predict_bnn(model: BayesianNeuralNetwork,
                 X: np.ndarray,
-                num_samples: int = 100) -> Tuple[np.ndarray, np.ndarray]:
+                num_samples: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Make predictions with uncertainty estimates using BNN"""
-    model.train()  # Keep in training mode for sampling
+    model.train()
     predictions = []
     X_tensor = torch.FloatTensor(X).reshape(-1, 1)
     
@@ -204,9 +207,13 @@ def predict_bnn(model: BayesianNeuralNetwork,
     
     predictions = np.array(predictions)
     mean = predictions.mean(axis=0)
-    std = predictions.std(axis=0)
     
-    return mean, std
+    # Decompose uncertainty
+    aleatoric_uncertainty = np.ones_like(mean) * 0.1
+    epistemic_uncertainty = predictions.std(axis=0)
+    total_std = np.sqrt(aleatoric_uncertainty**2 + epistemic_uncertainty**2)
+    
+    return mean, total_std, epistemic_uncertainty, aleatoric_uncertainty
 
 def predict_gp(model: GPModel,
                likelihood: gpytorch.likelihoods.GaussianLikelihood,
@@ -219,34 +226,36 @@ def predict_gp(model: GPModel,
         observed_pred = likelihood(model(X))
         mean = observed_pred.mean.numpy()
         std = observed_pred.stddev.numpy()
-    
+        
     return mean, std
 
+# Visualization Functions
 def plot_comparative_analysis(X_train: np.ndarray,
                             y_train: np.ndarray,
                             X_test: np.ndarray,
                             bnn_results: Tuple,
                             gp_results: Tuple,
                             true_function: Optional[callable] = None):
-    """Create comparison plots for BNN and GP"""
-    bnn_mean, bnn_std = bnn_results
+    """Create comprehensive comparison plots"""
+    bnn_mean, bnn_total_std, bnn_epistemic, bnn_aleatoric = bnn_results
     gp_mean, gp_std = gp_results
     
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+    fig = plt.figure(figsize=(15, 10))
     
-    # BNN predictions
+    # Main prediction plots
+    ax1 = plt.subplot2grid((2, 3), (0, 0), colspan=2)
     ax1.scatter(X_train, y_train, c='black', label='Training Data')
     ax1.plot(X_test, bnn_mean, 'b-', label='BNN Mean')
     ax1.fill_between(X_test.flatten(),
-                    bnn_mean.flatten() - 2*bnn_std.flatten(),
-                    bnn_mean.flatten() + 2*bnn_std.flatten(),
+                    bnn_mean.flatten() - 2*bnn_total_std.flatten(),
+                    bnn_mean.flatten() + 2*bnn_total_std.flatten(),
                     alpha=0.3, color='blue', label='BNN 95% CI')
     if true_function is not None:
         ax1.plot(X_test, true_function(X_test), 'r--', label='True Function')
     ax1.set_title('BNN Predictions')
     ax1.legend()
     
-    # GP predictions
+    ax2 = plt.subplot2grid((2, 3), (1, 0), colspan=2)
     ax2.scatter(X_train, y_train, c='black', label='Training Data')
     ax2.plot(X_test, gp_mean, 'g-', label='GP Mean')
     ax2.fill_between(X_test.flatten(),
@@ -258,9 +267,22 @@ def plot_comparative_analysis(X_train: np.ndarray,
     ax2.set_title('Gaussian Process Predictions')
     ax2.legend()
     
+    # Uncertainty decomposition
+    ax3 = plt.subplot2grid((2, 3), (0, 2))
+    ax3.plot(X_test, bnn_epistemic.flatten(), 'b-', label='Epistemic')
+    ax3.plot(X_test, bnn_aleatoric.flatten(), 'r-', label='Aleatoric')
+    ax3.set_title('BNN Uncertainty Decomposition')
+    ax3.legend()
+    
+    ax4 = plt.subplot2grid((2, 3), (1, 2))
+    ax4.plot(X_test, gp_std, 'g-', label='GP Total Uncertainty')
+    ax4.set_title('GP Uncertainty')
+    ax4.legend()
+    
     plt.tight_layout()
     plt.show()
 
+# Main Experiment Function
 def run_comparison_experiment(X_train: np.ndarray,
                             y_train: np.ndarray,
                             X_test: np.ndarray,
@@ -277,32 +299,28 @@ def run_comparison_experiment(X_train: np.ndarray,
     print("Training BNN...")
     bnn_model = BayesianNeuralNetwork(bnn_config)
     bnn_model, bnn_losses = train_bnn(bnn_model, X_train, y_train, bnn_config)
-    bnn_mean, bnn_std = predict_bnn(bnn_model, X_test, bnn_config.num_samples)
+    bnn_results = predict_bnn(bnn_model, X_test, bnn_config.num_samples)
     
     # Train GP
     print("\nTraining GP...")
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     gp_model = GPModel(X_train_tensor, y_train_tensor, likelihood, gp_config)
     gp_model, gp_losses = train_gp(gp_model, likelihood, X_train_tensor, y_train_tensor, gp_config)
-    gp_mean, gp_std = predict_gp(gp_model, likelihood, X_test_tensor)
+    gp_results = predict_gp(gp_model, likelihood, X_test_tensor)
     
     # Plot results
-    plot_comparative_analysis(
-        X_train, y_train, X_test,
-        (bnn_mean, bnn_std),
-        (gp_mean, gp_std),
-        true_function
-    )
+    plot_comparative_analysis(X_train, y_train, X_test, bnn_results, gp_results, true_function)
     
     return {
         'bnn_model': bnn_model,
         'bnn_losses': bnn_losses,
-        'bnn_results': (bnn_mean, bnn_std),
+        'bnn_results': bnn_results,
         'gp_model': gp_model,
         'gp_losses': gp_losses,
-        'gp_results': (gp_mean, gp_std)
+        'gp_results': gp_results
     }
 
+# Example usage with analysis
 if __name__ == "__main__":
     # Generate synthetic data
     np.random.seed(42)
@@ -357,34 +375,22 @@ if __name__ == "__main__":
     
     # Calculate and print metrics
     def calculate_metrics(true_fn, X, mean_pred, std_pred):
-        """Calculate prediction accuracy and uncertainty calibration metrics"""
         true_y = true_fn(X)
-        
-        # Calculate RMSE for prediction accuracy
         mse = np.mean((true_y - mean_pred.flatten())**2)
         rmse = np.sqrt(mse)
         
-        # Calculate calibration (percentage of true values within 2σ confidence interval)
+        # Calculate calibration (percentage of true values within 2σ)
         within_bounds = np.logical_and(
             true_y >= mean_pred.flatten() - 2*std_pred.flatten(),
             true_y <= mean_pred.flatten() + 2*std_pred.flatten()
         )
         calibration = np.mean(within_bounds)
         
-        # Calculate average uncertainty
-        avg_uncertainty = np.mean(std_pred)
-        
-        # Calculate normalized uncertainty (uncertainty/RMSE)
-        normalized_uncertainty = avg_uncertainty/rmse
-        
         return {
             'RMSE': rmse,
-            'Calibration': calibration,
-            'Avg Uncertainty': avg_uncertainty,
-            'Normalized Uncertainty': normalized_uncertainty
+            'Calibration': calibration
         }
     
-    print("\nComputing performance metrics...")
     bnn_metrics = calculate_metrics(
         np.sin,
         X_test,
@@ -399,27 +405,10 @@ if __name__ == "__main__":
         results['gp_results'][1]
     )
     
-    print("\nBayesian Neural Network Metrics:")
+    print("\nBNN Metrics:")
     for metric, value in bnn_metrics.items():
-        print(f"{metric:20s}: {value:.4f}")
+        print(f"{metric}: {value:.4f}")
     
-    print("\nGaussian Process Metrics:")
+    print("\nGP Metrics:")
     for metric, value in gp_metrics.items():
-        print(f"{metric:20s}: {value:.4f}")
-    
-    # Provide analysis summary
-    print("\nAnalysis Summary:")
-    print("1. Prediction Accuracy: ", end="")
-    if bnn_metrics['RMSE'] < gp_metrics['RMSE']:
-        print("BNN shows better accuracy")
-    else:
-        print("GP shows better accuracy")
-        
-    print("2. Uncertainty Calibration: ", end="")
-    if abs(bnn_metrics['Calibration'] - 0.95) < abs(gp_metrics['Calibration'] - 0.95):
-        print("BNN shows better calibration")
-    else:
-        print("GP shows better calibration")
-        
-    print("3. Uncertainty Estimation: ", end="")
-    print("Compare normalized uncertainties to understand relative confidence")
+        print(f"{metric}: {value:.4f}")
