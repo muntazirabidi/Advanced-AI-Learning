@@ -6,3 +6,13 @@ __pycache__/
 venv/
 .env
 
+# Ignore data folder and all its contents
+data/
+data/FashionMNIST/
+data/FashionMNIST/raw/
+
+# Ignore models folder and all its contents
+models/
+*.pth
+*.pt
+*.ckpt
